@@ -1,6 +1,8 @@
+use crate::engine::editor::*;
 use crate::engine::input::handle_input;
 use crate::engine::objects::*;
 use bevy::prelude::*;
+use bevy_egui::*;
 use bevy_rapier3d::prelude::*;
 
 pub fn run() {
@@ -8,16 +10,29 @@ pub fn run() {
         .add_plugins(DefaultPlugins)
         .add_plugins(RapierPhysicsPlugin::<NoUserData>::default())
         .add_plugins(RapierDebugRenderPlugin::default())
+        .add_plugins(EguiPlugin {
+            enable_multipass_for_primary_context: true,
+        })
         // Add custom events
         .add_event::<SpawnEntityEvent>()
         // Initialize resources
         .init_resource::<SelectedShape>()
+        .init_resource::<GameObjectManager>()
         // Startup systems
         .add_systems(Startup, (setup_graphics, setup_physics))
-        // Update systems
+        .add_systems(EguiContextPass, ui_example_system)
+        // Update systems with proper ordering
         .add_systems(
             Update,
-            (handle_input, spawn_entity_system, shape_selection_ui),
+            (
+                // Input handling first
+                handle_input,
+                // Then UI systems (egui context is automatically managed by the plugin)
+                (shape_selection_ui).chain(), // Ensure UI systems run in order
+                // Finally, game logic systems
+                spawn_entity_system,
+            )
+                .chain(), // Ensure proper execution order
         )
         .run();
 }

@@ -56,6 +56,15 @@ impl ShapeType {
     }
 }
 
+// Component to identify game objects
+#[derive(Component)]
+pub struct GameObjectId {
+    pub id: u32,
+    pub name: String,
+    pub shape_type: ShapeType,
+    pub created_at: f64, // timestamp
+}
+
 // Resource to store currently selected shape
 #[derive(Resource)]
 pub struct SelectedShape {
@@ -74,6 +83,92 @@ impl Default for SelectedShape {
 pub struct SpawnEntityEvent {
     pub position: Vec3,
     pub shape_type: ShapeType,
+    pub custom_name: Option<String>, // Allow custom naming
+}
+
+// Improved GameObject struct
+#[derive(Debug, Clone)]
+pub struct GameObject {
+    pub id: u32,
+    pub name: String,
+    pub entity: Entity,
+    pub shape_type: ShapeType,
+    pub position: Vec3,
+    pub created_at: f64,
+}
+
+#[derive(Resource, Default)]
+pub struct GameObjectManager {
+    pub objects: Vec<GameObject>,
+    pub next_id: u32,
+}
+
+impl GameObjectManager {
+    pub fn add_object(
+        &mut self,
+        entity: Entity,
+        shape_type: ShapeType,
+        position: Vec3,
+        custom_name: Option<String>,
+        timestamp: f64,
+    ) -> u32 {
+        let id = self.next_id;
+        let name = custom_name.unwrap_or_else(|| format!("{} {}", shape_type.display_name(), id));
+
+        let game_object = GameObject {
+            id,
+            name: name.clone(),
+            entity,
+            shape_type,
+            position,
+            created_at: timestamp,
+        };
+
+        self.objects.push(game_object);
+        self.next_id += 1;
+
+        info!("Added game object: {} (ID: {}) at {:?}", name, id, position);
+        id
+    }
+
+    pub fn remove_object(&mut self, entity: Entity) -> Option<GameObject> {
+        if let Some(index) = self.objects.iter().position(|obj| obj.entity == entity) {
+            let removed = self.objects.remove(index);
+            info!("Removed game object: {} (ID: {})", removed.name, removed.id);
+            Some(removed)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_object_by_entity(&self, entity: Entity) -> Option<&GameObject> {
+        self.objects.iter().find(|obj| obj.entity == entity)
+    }
+
+    pub fn get_object_by_id(&self, id: u32) -> Option<&GameObject> {
+        self.objects.iter().find(|obj| obj.id == id)
+    }
+
+    pub fn get_objects_by_type(&self, shape_type: ShapeType) -> Vec<&GameObject> {
+        self.objects
+            .iter()
+            .filter(|obj| obj.shape_type == shape_type)
+            .collect()
+    }
+
+    pub fn list_objects(&self) -> Vec<String> {
+        self.objects
+            .iter()
+            .map(|obj| {
+                format!(
+                    "{} (ID: {}, Type: {})",
+                    obj.name,
+                    obj.id,
+                    obj.shape_type.display_name()
+                )
+            })
+            .collect()
+    }
 }
 
 pub fn spawn_entity_system(
@@ -81,6 +176,8 @@ pub fn spawn_entity_system(
     mut spawn_events: EventReader<SpawnEntityEvent>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut game_manager: ResMut<GameObjectManager>,
+    time: Res<Time>,
 ) {
     for event in spawn_events.read() {
         let collider = event.shape_type.create_collider();
@@ -94,14 +191,46 @@ pub fn spawn_entity_system(
             ..default()
         });
 
-        commands.spawn((
-            Mesh3d(mesh),
-            MeshMaterial3d(material),
-            Transform::from_translation(event.position),
-            RigidBody::Dynamic,
-            collider,
-            Restitution::coefficient(0.7),
-        ));
+        let entity = commands
+            .spawn((
+                Mesh3d(mesh),
+                MeshMaterial3d(material),
+                Transform::from_translation(event.position),
+                RigidBody::Dynamic,
+                collider,
+                Restitution::coefficient(0.7),
+            ))
+            .id();
+
+        // Add the GameObject ID component and register with manager
+        let object_id = game_manager.add_object(
+            entity,
+            event.shape_type,
+            event.position,
+            event.custom_name.clone(),
+            time.elapsed_secs_f64(),
+        );
+
+        // Add the GameObjectId component to the entity
+        commands.entity(entity).insert(GameObjectId {
+            id: object_id,
+            name: event
+                .custom_name
+                .clone()
+                .unwrap_or_else(|| format!("{} {}", event.shape_type.display_name(), object_id)),
+            shape_type: event.shape_type,
+            created_at: time.elapsed_secs_f64(),
+        });
+    }
+}
+
+// System to handle entity removal and cleanup
+pub fn cleanup_destroyed_entities_system(
+    mut removed: RemovedComponents<GameObjectId>,
+    mut game_manager: ResMut<GameObjectManager>,
+) {
+    for entity in removed.read() {
+        game_manager.remove_object(entity);
     }
 }
 
@@ -109,6 +238,7 @@ pub fn spawn_entity_system(
 pub fn shape_selection_ui(
     mut selected_shape: ResMut<SelectedShape>,
     keyboard_input: Res<ButtonInput<KeyCode>>,
+    game_manager: Res<GameObjectManager>,
 ) {
     // Cycle through shapes with Tab key
     if keyboard_input.just_pressed(KeyCode::Tab) {
@@ -123,5 +253,30 @@ pub fn shape_selection_ui(
             "Selected shape: {}",
             selected_shape.shape_type.display_name()
         );
+    }
+
+    // Debug: Print all objects with 'L' key
+    if keyboard_input.just_pressed(KeyCode::KeyL) {
+        info!("Current game objects:");
+        for object_info in game_manager.list_objects() {
+            info!("  {}", object_info);
+        }
+        info!("Total objects: {}", game_manager.objects.len());
+    }
+}
+
+// System to update object positions (useful for tracking moving objects)
+pub fn update_object_positions_system(
+    mut game_manager: ResMut<GameObjectManager>,
+    query: Query<(Entity, &Transform), (With<GameObjectId>, Changed<Transform>)>,
+) {
+    for (entity, transform) in query.iter() {
+        if let Some(obj) = game_manager
+            .objects
+            .iter_mut()
+            .find(|obj| obj.entity == entity)
+        {
+            obj.position = transform.translation;
+        }
     }
 }

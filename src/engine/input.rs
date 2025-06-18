@@ -12,6 +12,7 @@ pub fn handle_input(
         spawn_events.send(SpawnEntityEvent {
             position: Vec3::new(x, 4.0, z),
             shape_type: selected_shape.shape_type,
+            custom_name: Some("bob".to_string()),
         });
     }
 }

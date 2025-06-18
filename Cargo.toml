@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 bevy = "0.16.1"
 bevy_rapier3d = "0.30.0"
-egui = "0.31.1"
 serde = "1.0.219"
 rand = "0.8"
+bevy_egui = "0.34.1"
+
+[profile.dev.package."*"]
+opt-level = 3
